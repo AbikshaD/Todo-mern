@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import './TodoList.css';
 
-const API_URL = 'http://localhost:5000/api/todos';
+const API_URL = 'http://localhost:5000/api';
 
 function TodoList() {
   const [todos, setTodos] = useState([]);
-  const [filteredTodos, setFilteredTodos] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [activeView, setActiveView] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('all');
   
   // Form states
   const [showForm, setShowForm] = useState(false);
@@ -16,74 +20,168 @@ function TodoList() {
     text: '',
     description: '',
     priority: 'medium',
-    dueDate: ''
+    category: 'personal',
+    dueDate: '',
+    estimatedTime: '',
+    isDaily: false,
+    dailyReset: false,
+    recurring: 'none',
+    tags: [],
+    subtasks: []
   });
   
   // Filter states
-  const [filter, setFilter] = useState('all'); // all, active, completed
+  const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('all');
   const [selectedTodos, setSelectedTodos] = useState([]);
 
   useEffect(() => {
-    fetchTodos();
+    fetchAllData();
   }, []);
 
   useEffect(() => {
-    filterTodos();
-  }, [todos, filter, searchTerm]);
+    if (activeView === 'category' && selectedCategory !== 'all') {
+      fetchCategoryTodos(selectedCategory);
+    }
+  }, [activeView, selectedCategory]);
 
-  const fetchTodos = async () => {
+  const fetchAllData = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(API_URL);
-      setTodos(response.data);
+      const [todosRes, categoriesRes, statsRes] = await Promise.all([
+        axios.get(`${API_URL}/todos`),
+        axios.get(`${API_URL}/categories`),
+        axios.get(`${API_URL}/categories/stats/overview`)
+      ]);
+      
+      setTodos(todosRes.data);
+      setCategories(categoriesRes.data);
+      setStats(statsRes.data);
       setError('');
     } catch (err) {
-      setError('Failed to fetch todos');
-      console.error('Error fetching todos:', err);
+      setError('Failed to fetch data');
+      console.error('Error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const filterTodos = () => {
-    let filtered = [...todos];
-    
-    // Apply completion filter
-    if (filter === 'active') {
-      filtered = filtered.filter(todo => !todo.completed);
-    } else if (filter === 'completed') {
-      filtered = filtered.filter(todo => todo.completed);
+  const fetchCategoryTodos = async (category) => {
+    try {
+      const response = await axios.get(`${API_URL}/categories/${category}/todos`, {
+        params: { completed: filter !== 'all' ? filter === 'completed' : undefined }
+      });
+      setTodos(response.data);
+    } catch (err) {
+      setError('Failed to fetch category todos');
     }
-    
-    // Apply search filter
-    if (searchTerm) {
-      filtered = filtered.filter(todo => 
-        todo.text.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        todo.description.toLowerCase().includes(searchTerm.toLowerCase())
-      );
+  };
+
+  const fetchDailyTasks = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/categories/daily/active`);
+      setTodos(response.data);
+    } catch (err) {
+      setError('Failed to fetch daily tasks');
     }
+  };
+
+  const handleToggle = async (id, completed) => {
+    try {
+      const response = await axios.patch(`${API_URL}/todos/${id}`, { 
+        completed: !completed 
+      });
+      setTodos(todos.map(todo => 
+        todo._id === id ? response.data : todo
+      ));
+      fetchAllData(); // Refresh stats
+    } catch (err) {
+      setError('Failed to update todo');
+      console.error('Error:', err);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this todo?')) return;
     
-    setFilteredTodos(filtered);
+    try {
+      await axios.delete(`${API_URL}/todos/${id}`);
+      setTodos(todos.filter(todo => todo._id !== id));
+      fetchAllData(); // Refresh stats
+    } catch (err) {
+      setError('Failed to delete todo');
+      console.error('Error:', err);
+    }
+  };
+
+  const handleEdit = (todo) => {
+    setEditingTodo(todo);
+    setFormData({
+      text: todo.text,
+      description: todo.description || '',
+      priority: todo.priority,
+      category: todo.category,
+      dueDate: todo.dueDate ? todo.dueDate.split('T')[0] : '',
+      estimatedTime: todo.estimatedTime || '',
+      isDaily: todo.isDaily || false,
+      dailyReset: todo.dailyReset || false,
+      recurring: todo.recurring || 'none',
+      tags: todo.tags || [],
+      subtasks: todo.subtasks || []
+    });
+    setShowForm(true);
   };
 
   const handleInputChange = (e) => {
-    const { name, value } = e.target;
+    const { name, value, type, checked } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: value
+      [name]: type === 'checkbox' ? checked : value
     }));
   };
 
-  const resetForm = () => {
-    setFormData({
-      text: '',
-      description: '',
-      priority: 'medium',
-      dueDate: ''
-    });
-    setEditingTodo(null);
-    setShowForm(false);
+  const handleTagInput = (e) => {
+    if (e.key === 'Enter' && e.target.value) {
+      e.preventDefault();
+      const newTag = e.target.value.trim();
+      if (newTag && !formData.tags.includes(newTag)) {
+        setFormData(prev => ({
+          ...prev,
+          tags: [...prev.tags, newTag]
+        }));
+      }
+      e.target.value = '';
+    }
+  };
+
+  const removeTag = (tagToRemove) => {
+    setFormData(prev => ({
+      ...prev,
+      tags: prev.tags.filter(tag => tag !== tagToRemove)
+    }));
+  };
+
+  const handleSubtaskAdd = (e) => {
+    if (e.key === 'Enter' && e.target.value) {
+      e.preventDefault();
+      const newSubtask = {
+        text: e.target.value.trim(),
+        completed: false
+      };
+      setFormData(prev => ({
+        ...prev,
+        subtasks: [...prev.subtasks, newSubtask]
+      }));
+      e.target.value = '';
+    }
+  };
+
+  const removeSubtask = (index) => {
+    setFormData(prev => ({
+      ...prev,
+      subtasks: prev.subtasks.filter((_, i) => i !== index)
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -96,95 +194,64 @@ function TodoList() {
 
     try {
       if (editingTodo) {
-        // Update todo
-        const response = await axios.put(`${API_URL}/${editingTodo._id}`, formData);
+        const response = await axios.put(`${API_URL}/todos/${editingTodo._id}`, formData);
         setTodos(todos.map(todo => 
           todo._id === editingTodo._id ? response.data : todo
         ));
       } else {
-        // Create todo
-        const response = await axios.post(API_URL, formData);
+        const response = await axios.post(`${API_URL}/todos`, formData);
         setTodos([response.data, ...todos]);
       }
       
       resetForm();
+      fetchAllData(); // Refresh stats
     } catch (err) {
       setError(`Failed to ${editingTodo ? 'update' : 'create'} todo`);
       console.error('Error:', err);
     }
   };
 
-  const handleEdit = (todo) => {
-    setEditingTodo(todo);
-    setFormData({
-      text: todo.text,
-      description: todo.description || '',
-      priority: todo.priority,
-      dueDate: todo.dueDate ? todo.dueDate.split('T')[0] : ''
-    });
-    setShowForm(true);
-  };
-
-  const handleToggle = async (id, completed) => {
+  const handleSubtaskToggle = async (todoId, subtaskId, completed) => {
     try {
-      const response = await axios.patch(`${API_URL}/${id}`, { 
-        completed: !completed 
+      const response = await axios.patch(`${API_URL}/todos/${todoId}/subtasks/${subtaskId}`, {
+        completed: !completed
       });
-      setTodos(todos.map(todo => 
-        todo._id === id ? response.data : todo
-      ));
+      setTodos(todos.map(todo => todo._id === todoId ? response.data : todo));
     } catch (err) {
-      setError('Failed to update todo');
-      console.error('Error:', err);
+      setError('Failed to update subtask');
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this todo?')) return;
-    
+  const handleTimeLog = async (todoId, minutes) => {
     try {
-      await axios.delete(`${API_URL}/${id}`);
-      setTodos(todos.filter(todo => todo._id !== id));
-      setSelectedTodos(selectedTodos.filter(todoId => todoId !== id));
+      const response = await axios.post(`${API_URL}/todos/${todoId}/time`, { minutes });
+      setTodos(todos.map(todo => todo._id === todoId ? response.data : todo));
     } catch (err) {
-      setError('Failed to delete todo');
-      console.error('Error:', err);
+      setError('Failed to log time');
     }
   };
 
-  const handleBulkDelete = async () => {
-    if (selectedTodos.length === 0) return;
-    
-    if (!window.confirm(`Delete ${selectedTodos.length} selected todos?`)) return;
-    
-    try {
-      await axios.delete(API_URL, { data: { ids: selectedTodos } });
-      setTodos(todos.filter(todo => !selectedTodos.includes(todo._id)));
-      setSelectedTodos([]);
-    } catch (err) {
-      setError('Failed to delete selected todos');
-      console.error('Error:', err);
-    }
-  };
-
-  const handleSelectAll = () => {
-    if (selectedTodos.length === filteredTodos.length) {
-      setSelectedTodos([]);
-    } else {
-      setSelectedTodos(filteredTodos.map(todo => todo._id));
-    }
-  };
-
-  const handleSelectTodo = (id) => {
-    setSelectedTodos(prev => 
-      prev.includes(id) 
-        ? prev.filter(todoId => todoId !== id)
-        : [...prev, id]
-    );
+  const resetForm = () => {
+    setFormData({
+      text: '',
+      description: '',
+      priority: 'medium',
+      category: 'personal',
+      dueDate: '',
+      estimatedTime: '',
+      isDaily: false,
+      dailyReset: false,
+      recurring: 'none',
+      tags: [],
+      subtasks: []
+    });
+    setEditingTodo(null);
+    setShowForm(false);
   };
 
   const getPriorityColor = (priority) => {
     switch(priority) {
+      case 'urgent': return '#dc3545';
       case 'high': return '#ff4444';
       case 'medium': return '#ffbb33';
       case 'low': return '#00C851';
@@ -192,444 +259,473 @@ function TodoList() {
     }
   };
 
+  const getCategoryColor = (category) => {
+    const colors = {
+      personal: '#4CAF50',
+      work: '#2196F3',
+      shopping: '#FF9800',
+      health: '#f44336',
+      education: '#9C27B0',
+      other: '#607D8B'
+    };
+    return colors[category] || '#607D8B';
+  };
+
+  const formatDate = (date) => {
+    if (!date) return '';
+    return new Date(date).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  // FIXED: Added completed parameter to check if todo is completed
+  const isOverdue = (dueDate, completed) => {
+    if (!dueDate || completed) return false;
+    return new Date(dueDate) < new Date();
+  };
+
   if (loading) {
-    return (
-      <div style={styles.container}>
-        <div style={styles.loading}>Loading todos...</div>
-      </div>
-    );
+    return <div className="loading">Loading dashboard...</div>;
   }
 
   return (
-    <div style={styles.container}>
-      <h1 style={styles.header}>📝 Todo List Manager</h1>
-      
-      {error && (
-        <div style={styles.error}>
-          {error}
-          <button onClick={() => setError('')} style={styles.errorClose}>×</button>
-        </div>
-      )}
-
-      {/* Search and Filter Bar */}
-      <div style={styles.toolbar}>
-        <input
-          type="text"
-          placeholder="Search todos..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={styles.searchInput}
-        />
-        
-        <select 
-          value={filter} 
-          onChange={(e) => setFilter(e.target.value)}
-          style={styles.filterSelect}
-        >
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-        </select>
-        
-        <button 
-          onClick={() => setShowForm(!showForm)}
-          style={styles.addButton}
-        >
-          {showForm ? 'Cancel' : '+ New Todo'}
-        </button>
-        
-        {selectedTodos.length > 0 && (
-          <button 
-            onClick={handleBulkDelete}
-            style={styles.bulkDeleteButton}
-          >
-            Delete Selected ({selectedTodos.length})
-          </button>
-        )}
-      </div>
-
-      {/* Add/Edit Form */}
-      {showForm && (
-        <div style={styles.formContainer}>
-          <h3>{editingTodo ? 'Edit Todo' : 'Create New Todo'}</h3>
-          <form onSubmit={handleSubmit} style={styles.form}>
-            <input
-              type="text"
-              name="text"
-              placeholder="Todo title *"
-              value={formData.text}
-              onChange={handleInputChange}
-              style={styles.formInput}
-              required
-            />
-            
-            <textarea
-              name="description"
-              placeholder="Description (optional)"
-              value={formData.description}
-              onChange={handleInputChange}
-              style={styles.formTextarea}
-              rows="3"
-            />
-            
-            <div style={styles.formRow}>
-              <select
-                name="priority"
-                value={formData.priority}
-                onChange={handleInputChange}
-                style={styles.formSelect}
-              >
-                <option value="low">Low Priority</option>
-                <option value="medium">Medium Priority</option>
-                <option value="high">High Priority</option>
-              </select>
-              
-              <input
-                type="date"
-                name="dueDate"
-                value={formData.dueDate}
-                onChange={handleInputChange}
-                style={styles.formDate}
-              />
+    <div className="todo-app">
+      <header className="app-header">
+        <h1>📋 TaskMaster Pro</h1>
+        {stats && (
+          <div className="stats-grid">
+            <div className="stat-card">
+              <span className="stat-value">{stats.total}</span>
+              <span className="stat-label">Total Tasks</span>
             </div>
-            
-            <div style={styles.formButtons}>
-              <button type="submit" style={styles.submitButton}>
-                {editingTodo ? 'Update' : 'Create'}
-              </button>
-              <button type="button" onClick={resetForm} style={styles.cancelButton}>
-                Cancel
-              </button>
+            <div className="stat-card">
+              <span className="stat-value">{stats.completed}</span>
+              <span className="stat-label">Completed</span>
             </div>
-          </form>
-        </div>
-      )}
-
-      {/* Todo List */}
-      <div style={styles.listContainer}>
-        {filteredTodos.length === 0 ? (
-          <div style={styles.emptyState}>
-            {searchTerm ? 'No todos match your search' : 'No todos yet. Create one!'}
+            <div className="stat-card">
+              <span className="stat-value">{stats.pending}</span>
+              <span className="stat-label">Pending</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{stats.dueToday}</span>
+              <span className="stat-label">Due Today</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{stats.overdue}</span>
+              <span className="stat-label">Overdue</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{stats.completionRate}%</span>
+              <span className="stat-label">Completion Rate</span>
+            </div>
           </div>
-        ) : (
-          <>
-            {/* Select All */}
-            <div style={styles.selectAll}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={selectedTodos.length === filteredTodos.length && filteredTodos.length > 0}
-                  onChange={handleSelectAll}
-                />
-                <span style={{ marginLeft: '8px' }}>Select All</span>
-              </label>
-              <span style={styles.todoCount}>
-                {filteredTodos.length} todo{filteredTodos.length !== 1 ? 's' : ''}
-              </span>
+        )}
+      </header>
+
+      {error && (
+        <div className="error-message">
+          {error}
+          <button onClick={() => setError('')}>×</button>
+        </div>
+      )}
+
+      <div className="main-content">
+        <aside className="sidebar">
+          <div className="sidebar-section">
+            <h3>Views</h3>
+            <button 
+              className={`view-btn ${activeView === 'all' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveView('all');
+                fetchAllData();
+              }}
+            >
+              📊 All Tasks
+            </button>
+            <button 
+              className={`view-btn ${activeView === 'daily' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveView('daily');
+                fetchDailyTasks();
+              }}
+            >
+              🌅 Daily Tasks
+            </button>
+          </div>
+
+          <div className="sidebar-section">
+            <h3>Categories</h3>
+            {categories.map(cat => (
+              <button
+                key={cat.name}
+                className={`category-btn ${selectedCategory === cat.name ? 'active' : ''}`}
+                style={{ borderLeftColor: cat.color }}
+                onClick={() => {
+                  setSelectedCategory(cat.name);
+                  setActiveView('category');
+                  fetchCategoryTodos(cat.name);
+                }}
+              >
+                <span className="category-name">{cat.name}</span>
+                <span className="category-count">{cat.pending}</span>
+              </button>
+            ))}
+          </div>
+
+          {stats && (
+            <div className="sidebar-section">
+              <h3>Daily Progress</h3>
+              <div className="progress-circle">
+                <svg viewBox="0 0 36 36">
+                  <path
+                    d="M18 2.0845
+                      a 15.9155 15.9155 0 0 1 0 31.831
+                      a 15.9155 15.9155 0 0 1 0 -31.831"
+                    fill="none"
+                    stroke="#eee"
+                    strokeWidth="3"
+                  />
+                  <path
+                    d="M18 2.0845
+                      a 15.9155 15.9155 0 0 1 0 31.831
+                      a 15.9155 15.9155 0 0 1 0 -31.831"
+                    fill="none"
+                    stroke="#4CAF50"
+                    strokeWidth="3"
+                    strokeDasharray={`${stats.dailyProgress}, 100`}
+                  />
+                  <text x="18" y="20.35" className="progress-text">
+                    {stats.dailyProgress}%
+                  </text>
+                </svg>
+              </div>
+              <div className="daily-stats">
+                <span>{stats.dailyCompleted}/{stats.totalDaily} done</span>
+              </div>
+            </div>
+          )}
+        </aside>
+
+        <main className="todo-main">
+          <div className="toolbar">
+            <div className="search-box">
+              <input
+                type="text"
+                placeholder="Search tasks..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+              {searchTerm && (
+                <button onClick={() => setSearchTerm('')}>✕</button>
+              )}
             </div>
 
-            {/* Todo Items */}
-            {filteredTodos.map(todo => (
-              <div key={todo._id} style={styles.todoItem}>
-                <div style={styles.todoCheckbox}>
+            <select 
+              value={filter} 
+              onChange={(e) => setFilter(e.target.value)}
+              className="filter-select"
+            >
+              <option value="all">All Tasks</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+            </select>
+
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              className="filter-select"
+            >
+              <option value="all">All Priorities</option>
+              <option value="urgent">Urgent</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+
+            <button 
+              onClick={() => setShowForm(!showForm)}
+              className="btn-primary"
+            >
+              {showForm ? 'Cancel' : '+ New Task'}
+            </button>
+          </div>
+
+          {showForm && (
+            <div className="task-form">
+              <h3>{editingTodo ? 'Edit Task' : 'Create New Task'}</h3>
+              <form onSubmit={handleSubmit}>
+                <div className="form-group">
                   <input
-                    type="checkbox"
-                    checked={selectedTodos.includes(todo._id)}
-                    onChange={() => handleSelectTodo(todo._id)}
+                    type="text"
+                    name="text"
+                    placeholder="Task title *"
+                    value={formData.text}
+                    onChange={handleInputChange}
+                    required
                   />
                 </div>
-                
-                <div style={styles.todoContent}>
-                  <div style={styles.todoHeader}>
+
+                <div className="form-group">
+                  <textarea
+                    name="description"
+                    placeholder="Description"
+                    value={formData.description}
+                    onChange={handleInputChange}
+                    rows="3"
+                  />
+                </div>
+
+                <div className="form-row">
+                  <select
+                    name="priority"
+                    value={formData.priority}
+                    onChange={handleInputChange}
+                  >
+                    <option value="low">Low Priority</option>
+                    <option value="medium">Medium Priority</option>
+                    <option value="high">High Priority</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+
+                  <select
+                    name="category"
+                    value={formData.category}
+                    onChange={handleInputChange}
+                  >
+                    <option value="personal">Personal</option>
+                    <option value="work">Work</option>
+                    <option value="shopping">Shopping</option>
+                    <option value="health">Health</option>
+                    <option value="education">Education</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div className="form-row">
+                  <input
+                    type="date"
+                    name="dueDate"
+                    value={formData.dueDate}
+                    onChange={handleInputChange}
+                  />
+                  <input
+                    type="number"
+                    name="estimatedTime"
+                    placeholder="Est. time (min)"
+                    value={formData.estimatedTime}
+                    onChange={handleInputChange}
+                  />
+                </div>
+
+                <div className="form-row">
+                  <label className="checkbox-label">
                     <input
                       type="checkbox"
-                      checked={todo.completed}
-                      onChange={() => handleToggle(todo._id, todo.completed)}
-                      style={styles.completeCheckbox}
+                      name="isDaily"
+                      checked={formData.isDaily}
+                      onChange={handleInputChange}
                     />
-                    <span style={{
-                      ...styles.todoText,
-                      textDecoration: todo.completed ? 'line-through' : 'none',
-                      opacity: todo.completed ? 0.7 : 1
-                    }}>
-                      {todo.text}
-                    </span>
-                    <span style={{
-                      ...styles.priorityBadge,
-                      backgroundColor: getPriorityColor(todo.priority)
-                    }}>
-                      {todo.priority}
-                    </span>
-                  </div>
-                  
-                  {todo.description && (
-                    <div style={styles.todoDescription}>
-                      {todo.description}
-                    </div>
+                    Daily Task
+                  </label>
+
+                  {formData.isDaily && (
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        name="dailyReset"
+                        checked={formData.dailyReset}
+                        onChange={handleInputChange}
+                      />
+                      Reset Daily
+                    </label>
                   )}
-                  
-                  <div style={styles.todoMeta}>
-                    {todo.dueDate && (
-                      <span style={styles.dueDate}>
-                        Due: {new Date(todo.dueDate).toLocaleDateString()}
+                </div>
+
+                <div className="form-group">
+                  <label>Tags (press Enter to add)</label>
+                  <div className="tags-input">
+                    <input
+                      type="text"
+                      placeholder="Add tags..."
+                      onKeyDown={handleTagInput}
+                    />
+                  </div>
+                  <div className="tags-list">
+                    {formData.tags.map(tag => (
+                      <span key={tag} className="tag">
+                        {tag}
+                        <button onClick={() => removeTag(tag)}>×</button>
                       </span>
-                    )}
-                    <span style={styles.createdDate}>
-                      Created: {new Date(todo.createdAt).toLocaleDateString()}
-                    </span>
+                    ))}
                   </div>
                 </div>
-                
-                <div style={styles.todoActions}>
-                  <button 
-                    onClick={() => handleEdit(todo)}
-                    style={styles.editButton}
-                  >
-                    Edit
+
+                <div className="form-group">
+                  <label>Subtasks (press Enter to add)</label>
+                  <div className="subtasks-input">
+                    <input
+                      type="text"
+                      placeholder="Add subtask..."
+                      onKeyDown={handleSubtaskAdd}
+                    />
+                  </div>
+                  <div className="subtasks-list">
+                    {formData.subtasks.map((subtask, index) => (
+                      <div key={index} className="subtask-item">
+                        <span>{subtask.text}</span>
+                        <button onClick={() => removeSubtask(index)}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="form-actions">
+                  <button type="submit" className="btn-primary">
+                    {editingTodo ? 'Update' : 'Create'}
                   </button>
-                  <button 
-                    onClick={() => handleDelete(todo._id)}
-                    style={styles.deleteButton}
-                  >
-                    Delete
+                  <button type="button" onClick={resetForm} className="btn-secondary">
+                    Cancel
                   </button>
                 </div>
+              </form>
+            </div>
+          )}
+
+          <div className="todo-list">
+            {todos.length === 0 ? (
+              <div className="empty-state">
+                {searchTerm ? 'No tasks match your search' : 'No tasks yet. Create one!'}
               </div>
-            ))}
-          </>
-        )}
+            ) : (
+              todos.map(todo => (
+                <div key={todo._id} className={`todo-item priority-${todo.priority}`}>
+                  <div className="todo-header">
+                    <div className="todo-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={todo.completed}
+                        onChange={() => handleToggle(todo._id, todo.completed)}
+                      />
+                    </div>
+                    
+                    <div className="todo-content">
+                      <div className="todo-title-row">
+                        <span className={`todo-title ${todo.completed ? 'completed' : ''}`}>
+                          {todo.text}
+                        </span>
+                        
+                        <div className="todo-badges">
+                          <span 
+                            className="priority-badge"
+                            style={{ backgroundColor: getPriorityColor(todo.priority) }}
+                          >
+                            {todo.priority}
+                          </span>
+                          
+                          <span 
+                            className="category-badge"
+                            style={{ backgroundColor: getCategoryColor(todo.category) }}
+                          >
+                            {todo.category}
+                          </span>
+                          
+                          {todo.isDaily && (
+                            <span className="daily-badge">Daily</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {todo.description && (
+                        <div className="todo-description">{todo.description}</div>
+                      )}
+
+                      {todo.tags && todo.tags.length > 0 && (
+                        <div className="todo-tags">
+                          {todo.tags.map(tag => (
+                            <span key={tag} className="tag">#{tag}</span>
+                          ))}
+                        </div>
+                      )}
+
+                      {todo.subtasks && todo.subtasks.length > 0 && (
+                        <div className="todo-subtasks">
+                          {todo.subtasks.map((subtask, index) => (
+                            <div key={index} className="subtask">
+                              <input
+                                type="checkbox"
+                                checked={subtask.completed}
+                                onChange={() => handleSubtaskToggle(todo._id, subtask._id, subtask.completed)}
+                              />
+                              <span className={subtask.completed ? 'completed' : ''}>
+                                {subtask.text}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="todo-meta">
+                        {todo.dueDate && (
+                          // FIXED: Pass both dueDate and completed to isOverdue
+                          <span className={`due-date ${isOverdue(todo.dueDate, todo.completed) ? 'overdue' : ''}`}>
+                            📅 Due: {formatDate(todo.dueDate)}
+                          </span>
+                        )}
+                        
+                        {todo.estimatedTime && (
+                          <span className="estimated-time">
+                            ⏱️ Est: {todo.estimatedTime}min
+                          </span>
+                        )}
+                        
+                        {todo.actualTime > 0 && (
+                          <span className="actual-time">
+                            ⌛ Actual: {todo.actualTime}min
+                          </span>
+                        )}
+
+                        {todo.progress > 0 && (
+                          <span className="progress">
+                            Progress: {todo.progress}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="todo-actions">
+                      {!todo.completed && (
+                        <button
+                          onClick={() => handleTimeLog(todo._id, 15)}
+                          className="time-btn"
+                          title="Log 15 minutes"
+                        >
+                          ⏱️ +15
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleEdit(todo)}
+                        className="edit-btn"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(todo._id)}
+                        className="delete-btn"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </main>
       </div>
     </div>
   );
 }
-
-// Styles
-const styles = {
-  container: {
-    maxWidth: '800px',
-    margin: '0 auto',
-    padding: '20px',
-    fontFamily: 'Arial, sans-serif'
-  },
-  header: {
-    color: '#333',
-    borderBottom: '2px solid #007bff',
-    paddingBottom: '10px'
-  },
-  error: {
-    backgroundColor: '#ff4444',
-    color: 'white',
-    padding: '10px',
-    borderRadius: '4px',
-    marginBottom: '15px',
-    position: 'relative'
-  },
-  errorClose: {
-    position: 'absolute',
-    right: '10px',
-    top: '5px',
-    background: 'none',
-    border: 'none',
-    color: 'white',
-    fontSize: '20px',
-    cursor: 'pointer'
-  },
-  toolbar: {
-    display: 'flex',
-    gap: '10px',
-    marginBottom: '20px',
-    flexWrap: 'wrap'
-  },
-  searchInput: {
-    flex: '1',
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px',
-    fontSize: '14px'
-  },
-  filterSelect: {
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px',
-    minWidth: '120px'
-  },
-  addButton: {
-    padding: '10px 20px',
-    backgroundColor: '#28a745',
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer'
-  },
-  bulkDeleteButton: {
-    padding: '10px 20px',
-    backgroundColor: '#dc3545',
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer'
-  },
-  formContainer: {
-    backgroundColor: '#f8f9fa',
-    padding: '20px',
-    borderRadius: '4px',
-    marginBottom: '20px'
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '15px'
-  },
-  formInput: {
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px',
-    fontSize: '14px'
-  },
-  formTextarea: {
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px',
-    fontSize: '14px',
-    resize: 'vertical'
-  },
-  formRow: {
-    display: 'flex',
-    gap: '10px'
-  },
-  formSelect: {
-    flex: '1',
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px'
-  },
-  formDate: {
-    flex: '1',
-    padding: '10px',
-    border: '1px solid #ddd',
-    borderRadius: '4px'
-  },
-  formButtons: {
-    display: 'flex',
-    gap: '10px'
-  },
-  submitButton: {
-    flex: '1',
-    padding: '12px',
-    backgroundColor: '#007bff',
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer'
-  },
-  cancelButton: {
-    flex: '1',
-    padding: '12px',
-    backgroundColor: '#6c757d',
-    color: 'white',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer'
-  },
-  listContainer: {
-    backgroundColor: 'white',
-    borderRadius: '4px',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-  },
-  emptyState: {
-    padding: '40px',
-    textAlign: 'center',
-    color: '#6c757d'
-  },
-  selectAll: {
-    padding: '10px 15px',
-    borderBottom: '1px solid #eee',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa'
-  },
-  todoCount: {
-    color: '#6c757d',
-    fontSize: '14px'
-  },
-  todoItem: {
-    display: 'flex',
-    padding: '15px',
-    borderBottom: '1px solid #eee',
-    gap: '15px',
-    alignItems: 'flex-start'
-  },
-  todoCheckbox: {
-    paddingTop: '3px'
-  },
-  todoContent: {
-    flex: '1'
-  },
-  todoHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginBottom: '8px',
-    flexWrap: 'wrap'
-  },
-  completeCheckbox: {
-    cursor: 'pointer'
-  },
-  todoText: {
-    fontWeight: '500'
-  },
-  priorityBadge: {
-    padding: '3px 8px',
-    borderRadius: '3px',
-    color: 'white',
-    fontSize: '12px',
-    textTransform: 'uppercase'
-  },
-  todoDescription: {
-    color: '#6c757d',
-    fontSize: '14px',
-    marginBottom: '8px',
-    marginLeft: '28px'
-  },
-  todoMeta: {
-    display: 'flex',
-    gap: '15px',
-    fontSize: '12px',
-    color: '#999',
-    marginLeft: '28px'
-  },
-  dueDate: {
-    color: '#dc3545'
-  },
-  createdDate: {
-    color: '#6c757d'
-  },
-  todoActions: {
-    display: 'flex',
-    gap: '5px'
-  },
-  editButton: {
-    padding: '5px 10px',
-    backgroundColor: '#ffc107',
-    color: 'white',
-    border: 'none',
-    borderRadius: '3px',
-    cursor: 'pointer'
-  },
-  deleteButton: {
-    padding: '5px 10px',
-    backgroundColor: '#dc3545',
-    color: 'white',
-    border: 'none',
-    borderRadius: '3px',
-    cursor: 'pointer'
-  },
-  loading: {
-    textAlign: 'center',
-    padding: '40px',
-    color: '#007bff'
-  }
-};
 
 export default TodoList;
