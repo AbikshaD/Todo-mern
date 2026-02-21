@@ -41,6 +41,7 @@ mongoose.connection.on('disconnected', () => {
 
 // Routes
 app.use('/api/todos', require('./routes/todos'));
+app.use('/api/categories', require('./routes/categories'));
 
 // Test route
 app.get('/api/test', (req, res) => {
@@ -59,7 +60,11 @@ app.get('/', (req, res) => {
       patchTodo: 'PATCH /api/todos/:id',
       deleteTodo: 'DELETE /api/todos/:id',
       bulkDelete: 'DELETE /api/todos',
-      test: 'GET /api/test'
+      test: 'GET /api/test',
+      todos: 'GET /api/todos',
+      categories: 'GET /api/categories',
+      daily: 'GET /api/categories/daily/active',
+      stats: 'GET /api/categories/stats/overview'
     }
   });
 });
